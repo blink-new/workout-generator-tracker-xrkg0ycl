@@ -75,14 +75,19 @@ export default function WorkoutGenerator() {
 
     setIsGenerating(true)
     try {
+      console.log('Генерация тренировки:', { selectedMuscleGroup, selectedTypes, exerciseCount })
+      console.log('Доступные упражнения:', exercises.length)
+      
       // Фильтруем упражнения по группе мышц и типам
       const filteredExercises = exercises.filter(ex => 
         ex.muscleGroup === selectedMuscleGroup && 
         selectedTypes.includes(ex.exerciseType)
       )
 
+      console.log('Отфильтрованные упражнения:', filteredExercises.length, filteredExercises)
+
       if (filteredExercises.length === 0) {
-        toast.error('Нет упражнений для выбранной группы мышц и типов')
+        toast.error(`Нет упражнений для группы "${selectedMuscleGroup}" и выбранных типов. Добавьте упражнения в базу данных.`)
         setIsGenerating(false)
         return
       }
@@ -139,12 +144,13 @@ export default function WorkoutGenerator() {
         addedCount++
       }
 
+      console.log('Сгенерированная тренировка:', workout)
       setGeneratedWorkout(workout)
       setWorkoutName(`Тренировка ${selectedMuscleGroup} - ${new Date().toLocaleDateString()}`)
       toast.success(`Сгенерирована тренировка из ${workout.length} упражнений!`)
     } catch (error) {
       console.error('Ошибка генерации тренировки:', error)
-      toast.error('Ошибка генерации тренировки')
+      toast.error(`Ошибка генерации тренировки: ${error.message}`)
     } finally {
       setIsGenerating(false)
     }
@@ -214,8 +220,8 @@ export default function WorkoutGenerator() {
 
       // Создаем упражнения тренировки
       for (const workoutExercise of generatedWorkout) {
-        await blink.db.workoutExercises.create({
-          id: `we_${Date.now()}_${workoutExercise.order}`,
+        await blink.db.workout_exercises.create({
+          id: `we_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
           workoutId: workout.id,
           exerciseId: workoutExercise.exerciseId,
           sets: workoutExercise.sets,
@@ -240,18 +246,18 @@ export default function WorkoutGenerator() {
   const deleteWorkout = async (workoutId: string) => {
     try {
       // Удаляем связанные упражнения
-      const workoutExercises = await blink.db.workoutExercises.list({
+      const workoutExercises = await blink.db.workout_exercises.list({
         where: { workoutId }
       })
       for (const we of workoutExercises) {
-        await blink.db.workoutExercises.delete(we.id)
+        await blink.db.workout_exercises.delete(we.id)
         
         // Удаляем связанные подходы
-        const sets = await blink.db.workoutSets.list({
+        const sets = await blink.db.workout_sets.list({
           where: { workoutExerciseId: we.id }
         })
         for (const set of sets) {
-          await blink.db.workoutSets.delete(set.id)
+          await blink.db.workout_sets.delete(set.id)
         }
       }
       
