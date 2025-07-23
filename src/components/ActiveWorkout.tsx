@@ -5,7 +5,7 @@ import { Input } from './ui/input'
 import { Badge } from './ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog'
 import { Progress } from './ui/progress'
-import { Play, Timer, Check, X, Plus, Minus, RotateCcw, Dumbbell } from 'lucide-react'
+import { Play, Timer, Check, X, Plus, Minus, RotateCcw, Dumbbell, ArrowUpDown } from 'lucide-react'
 import { toast } from 'sonner'
 import { blink } from '../blink/client'
 import Timer from './Timer'
@@ -21,6 +21,8 @@ export default function ActiveWorkout() {
   const [workoutStartTime, setWorkoutStartTime] = useState<Date | null>(null)
   const [workoutTime, setWorkoutTime] = useState(0)
   const [showTimer, setShowTimer] = useState(false)
+  const [showReplaceDialog, setShowReplaceDialog] = useState(false)
+  const [availableExercises, setAvailableExercises] = useState<Exercise[]>([])
 
   const loadSetsForExercise = async (workoutExerciseId: string) => {
     try {
@@ -59,13 +61,13 @@ export default function ActiveWorkout() {
         // Загружаем детали упражнений
         const exercisesWithDetails = await Promise.all(
           exercises.map(async (we) => {
-            const exercise = await blink.db.exercises.list({
+            const exerciseList = await blink.db.exercises.list({
               where: { id: we.exerciseId },
               limit: 1
             })
             return {
               ...we,
-              exercise: exercise[0]
+              exercise: exerciseList[0]
             }
           })
         )
@@ -257,6 +259,74 @@ export default function ActiveWorkout() {
   const completedSets = sets.filter(set => set.completed).length
   const progress = workoutExercises.length > 0 ? ((currentExerciseIndex + (completedSets / (currentExercise?.sets || 1))) / workoutExercises.length) * 100 : 0
 
+  const openReplaceDialog = async () => {
+    if (!currentExercise) return
+
+    try {
+      const user = await blink.auth.me()
+      // Загружаем все упражнения той же группы мышц и типа, исключая текущее
+      const exercises = await blink.db.exercises.list({
+        where: { 
+          userId: user.id,
+          muscleGroup: currentExercise.exercise.muscleGroup,
+          exerciseType: currentExercise.exercise.exerciseType
+        }
+      })
+
+      const filtered = exercises.filter(ex => 
+        ex.id !== currentExercise.exerciseId &&
+        !workoutExercises.some(we => we.exerciseId === ex.id)
+      )
+
+      setAvailableExercises(filtered)
+      setShowReplaceDialog(true)
+    } catch (error) {
+      console.error('Ошибка загрузки упражнений для замены:', error)
+      toast.error('Ошибка загрузки упражнений')
+    }
+  }
+
+  const replaceCurrentExercise = async (newExerciseId: string) => {
+    if (!currentExercise || !activeWorkout) return
+
+    try {
+      // Находим новое упражнение
+      const newExercise = availableExercises.find(ex => ex.id === newExerciseId)
+      if (!newExercise) return
+
+      // Обновляем упражнение в тренировке
+      await blink.db.workoutExercises.update(currentExercise.id, {
+        exerciseId: newExerciseId,
+        sets: newExercise.sets,
+        reps: newExercise.reps
+      })
+
+      // Удаляем все существующие подходы для этого упражнения
+      for (const set of sets) {
+        await blink.db.workoutSets.delete(set.id)
+      }
+
+      // Обновляем локальное состояние
+      const updatedExercises = [...workoutExercises]
+      updatedExercises[currentExerciseIndex] = {
+        ...currentExercise,
+        exerciseId: newExerciseId,
+        sets: newExercise.sets,
+        reps: newExercise.reps,
+        exercise: newExercise
+      }
+      setWorkoutExercises(updatedExercises)
+      setSets([])
+      setTempWeight(0)
+
+      setShowReplaceDialog(false)
+      toast.success(`Упражнение заменено на "${newExercise.name}"!`)
+    } catch (error) {
+      console.error('Ошибка замены упражнения:', error)
+      toast.error('Ошибка замены упражнения')
+    }
+  }
+
   if (!activeWorkout) {
     return (
       <div className="space-y-6">
@@ -332,10 +402,20 @@ export default function ActiveWorkout() {
                       {currentExercise.exercise.muscleGroup} • {currentExercise.exercise.exerciseType}
                     </p>
                   </div>
-                  <Badge variant="outline">
-                    {currentExercise.exercise.weightType === 'additional' ? 'Доп. вес' :
-                     currentExercise.exercise.weightType === 'bodyweight' ? 'Свой вес' : 'Антивес'}
-                  </Badge>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline">
+                      {currentExercise.exercise.weightType === 'additional' ? 'Доп. вес' :
+                       currentExercise.exercise.weightType === 'bodyweight' ? 'Свой вес' : 'Антивес'}
+                    </Badge>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={openReplaceDialog}
+                      title="Заменить упражнение"
+                    >
+                      <ArrowUpDown className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -475,6 +555,48 @@ export default function ActiveWorkout() {
           </Card>
         </div>
       </div>
+
+      {/* Диалог замены упражнения */}
+      <Dialog open={showReplaceDialog} onOpenChange={setShowReplaceDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Заменить упражнение</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-slate-600">
+              Выберите упражнение для замены "{currentExercise?.exercise.name}"
+            </p>
+            
+            {availableExercises.length === 0 ? (
+              <p className="text-sm text-slate-500 text-center py-4">
+                Нет доступных упражнений для замены
+              </p>
+            ) : (
+              <div className="space-y-2 max-h-60 overflow-y-auto">
+                {availableExercises.map((exercise) => (
+                  <Card 
+                    key={exercise.id} 
+                    className="p-3 cursor-pointer hover:bg-slate-50 transition-colors"
+                    onClick={() => replaceCurrentExercise(exercise.id)}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h4 className="font-medium">{exercise.name}</h4>
+                        <p className="text-sm text-slate-600">
+                          {exercise.sets} подходов × {exercise.reps} повторений
+                        </p>
+                      </div>
+                      <Badge variant="outline" className="text-xs">
+                        {exercise.exerciseType}
+                      </Badge>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

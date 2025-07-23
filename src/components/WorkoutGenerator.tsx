@@ -6,7 +6,7 @@ import { Input } from './ui/input'
 import { Label } from './ui/label'
 import { Badge } from './ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog'
-import { Plus, Dumbbell, RefreshCw, Play, Trash2 } from 'lucide-react'
+import { Plus, Dumbbell, RefreshCw, Play, Trash2, ArrowUpDown } from 'lucide-react'
 import { toast } from 'sonner'
 import { blink } from '../blink/client'
 import type { Exercise, Workout, WorkoutExercise } from '../types'
@@ -39,6 +39,7 @@ export default function WorkoutGenerator() {
       setExercises(result)
     } catch (error) {
       console.error('Ошибка загрузки упражнений:', error)
+      toast.error('Ошибка загрузки упражнений')
     }
   }
 
@@ -52,6 +53,7 @@ export default function WorkoutGenerator() {
       setWorkouts(result)
     } catch (error) {
       console.error('Ошибка загрузки тренировок:', error)
+      toast.error('Ошибка загрузки тренировок')
     }
   }
 
@@ -63,6 +65,11 @@ export default function WorkoutGenerator() {
   const generateWorkout = async () => {
     if (!selectedMuscleGroup) {
       toast.error('Выберите группу мышц')
+      return
+    }
+
+    if (selectedTypes.length === 0) {
+      toast.error('Выберите хотя бы один тип упражнений')
       return
     }
 
@@ -89,26 +96,28 @@ export default function WorkoutGenerator() {
       const workout: WorkoutExercise[] = []
       let addedCount = 0
 
-      // Добавляем упражнения по типам
+      // Добавляем упражнения по типам (по одному от каждого типа)
       for (const type of selectedTypes) {
         const typeExercises = exercisesByType[type]
         if (typeExercises.length > 0 && addedCount < exerciseCount) {
           // Случайно выбираем упражнение этого типа
           const randomExercise = typeExercises[Math.floor(Math.random() * typeExercises.length)]
           workout.push({
+            id: `we_${Date.now()}_${addedCount}`,
+            workoutId: '',
             exerciseId: randomExercise.id,
-            exercise: randomExercise,
             sets: randomExercise.sets,
             reps: randomExercise.reps,
             weight: 0,
             completed: false,
-            order: addedCount + 1
+            order: addedCount + 1,
+            exercise: randomExercise
           })
           addedCount++
         }
       }
 
-      // Если нужно больше упражнений, добавляем случайные
+      // Если нужно больше упражнений, добавляем случайные из доступных
       while (addedCount < exerciseCount && filteredExercises.length > addedCount) {
         const remainingExercises = filteredExercises.filter(ex => 
           !workout.some(w => w.exerciseId === ex.id)
@@ -117,20 +126,22 @@ export default function WorkoutGenerator() {
         
         const randomExercise = remainingExercises[Math.floor(Math.random() * remainingExercises.length)]
         workout.push({
+          id: `we_${Date.now()}_${addedCount}`,
+          workoutId: '',
           exerciseId: randomExercise.id,
-          exercise: randomExercise,
           sets: randomExercise.sets,
           reps: randomExercise.reps,
           weight: 0,
           completed: false,
-          order: addedCount + 1
+          order: addedCount + 1,
+          exercise: randomExercise
         })
         addedCount++
       }
 
       setGeneratedWorkout(workout)
       setWorkoutName(`Тренировка ${selectedMuscleGroup} - ${new Date().toLocaleDateString()}`)
-      toast.success('Тренировка сгенерирована!')
+      toast.success(`Сгенерирована тренировка из ${workout.length} упражнений!`)
     } catch (error) {
       console.error('Ошибка генерации тренировки:', error)
       toast.error('Ошибка генерации тренировки')
@@ -141,28 +152,35 @@ export default function WorkoutGenerator() {
 
   const replaceExercise = async (index: number) => {
     const currentExercise = generatedWorkout[index]
-    const filteredExercises = exercises.filter(ex => 
+    if (!currentExercise.exercise) return
+
+    // Находим все упражнения того же типа и группы мышц, исключая текущее
+    const availableExercises = exercises.filter(ex => 
       ex.muscleGroup === selectedMuscleGroup && 
-      ex.exerciseType === currentExercise.exercise.exerciseType &&
-      ex.id !== currentExercise.exerciseId
+      ex.exerciseType === currentExercise.exercise!.exerciseType &&
+      ex.id !== currentExercise.exerciseId &&
+      !generatedWorkout.some(w => w.exerciseId === ex.id) // Исключаем уже добавленные
     )
 
-    if (filteredExercises.length === 0) {
-      toast.error('Нет других упражнений этого типа для замены')
+    if (availableExercises.length === 0) {
+      toast.error(`Нет других упражнений типа "${currentExercise.exercise.exerciseType}" для замены`)
       return
     }
 
-    const randomExercise = filteredExercises[Math.floor(Math.random() * filteredExercises.length)]
+    // Случайно выбираем новое упражнение
+    const randomExercise = availableExercises[Math.floor(Math.random() * availableExercises.length)]
+    
     const newWorkout = [...generatedWorkout]
     newWorkout[index] = {
       ...newWorkout[index],
       exerciseId: randomExercise.id,
-      exercise: randomExercise,
       sets: randomExercise.sets,
-      reps: randomExercise.reps
+      reps: randomExercise.reps,
+      exercise: randomExercise
     }
+    
     setGeneratedWorkout(newWorkout)
-    toast.success('Упражнение заменено!')
+    toast.success(`Упражнение заменено на "${randomExercise.name}"!`)
   }
 
   const saveWorkout = async () => {
@@ -180,8 +198,9 @@ export default function WorkoutGenerator() {
       const user = await blink.auth.me()
       
       // Создаем тренировку
+      const workoutId = `workout_${Date.now()}`
       const workout = await blink.db.workouts.create({
-        id: `workout_${Date.now()}`,
+        id: workoutId,
         userId: user.id,
         name: workoutName,
         muscleGroup: selectedMuscleGroup,
@@ -220,14 +239,25 @@ export default function WorkoutGenerator() {
 
   const deleteWorkout = async (workoutId: string) => {
     try {
-      await blink.db.workouts.delete(workoutId)
       // Удаляем связанные упражнения
       const workoutExercises = await blink.db.workoutExercises.list({
         where: { workoutId }
       })
       for (const we of workoutExercises) {
         await blink.db.workoutExercises.delete(we.id)
+        
+        // Удаляем связанные подходы
+        const sets = await blink.db.workoutSets.list({
+          where: { workoutExerciseId: we.id }
+        })
+        for (const set of sets) {
+          await blink.db.workoutSets.delete(set.id)
+        }
       }
+      
+      // Удаляем тренировку
+      await blink.db.workouts.delete(workoutId)
+      
       toast.success('Тренировка удалена')
       loadWorkouts()
     } catch (error) {
@@ -266,7 +296,7 @@ export default function WorkoutGenerator() {
               Создать тренировку
             </Button>
           </DialogTrigger>
-          <DialogContent className="max-w-2xl">
+          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Генератор тренировки</DialogTitle>
             </DialogHeader>
@@ -321,7 +351,7 @@ export default function WorkoutGenerator() {
 
               <Button 
                 onClick={generateWorkout} 
-                disabled={isGenerating || !selectedMuscleGroup}
+                disabled={isGenerating || !selectedMuscleGroup || selectedTypes.length === 0}
                 className="w-full"
               >
                 {isGenerating ? (
@@ -354,12 +384,12 @@ export default function WorkoutGenerator() {
                       <Card key={index} className="p-4">
                         <div className="flex items-center justify-between">
                           <div className="flex-1">
-                            <h5 className="font-medium">{workoutExercise.exercise.name}</h5>
+                            <h5 className="font-medium">{workoutExercise.exercise?.name}</h5>
                             <div className="flex items-center gap-4 text-sm text-slate-600 mt-1">
                               <span>{workoutExercise.sets} подходов</span>
                               <span>{workoutExercise.reps} повторений</span>
                               <Badge variant="outline" className="text-xs">
-                                {workoutExercise.exercise.exerciseType}
+                                {workoutExercise.exercise?.exerciseType}
                               </Badge>
                             </div>
                           </div>
@@ -367,8 +397,9 @@ export default function WorkoutGenerator() {
                             variant="outline"
                             size="sm"
                             onClick={() => replaceExercise(index)}
+                            title="Заменить упражнение"
                           >
-                            <RefreshCw className="h-4 w-4" />
+                            <ArrowUpDown className="h-4 w-4" />
                           </Button>
                         </div>
                       </Card>
@@ -409,7 +440,8 @@ export default function WorkoutGenerator() {
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Badge variant={workout.status === 'completed' ? 'default' : 'outline'}>
+                    <Badge variant={workout.status === 'completed' ? 'default' : 
+                                   workout.status === 'active' ? 'destructive' : 'outline'}>
                       {workout.status === 'completed' ? 'Завершена' : 
                        workout.status === 'active' ? 'Активна' : 'Запланирована'}
                     </Badge>
